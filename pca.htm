@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PCA & Dimensionality Reduction Visualizer</title>
+    <style>
+        :root {
+            --bg: #111827;
+            --text: #f3f4f6;
+            --accent: #8b5cf6;
+            --secondary: #10b981;
+            --panel: #1f2937;
+        }
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 { margin-bottom: 10px; }
+        p { color: #9ca3af; max-width: 600px; text-align: center; margin-bottom: 30px; }
+        
+        .main-container {
+            display: flex;
+            gap: 30px;
+            align-items: flex-start;
+        }
+
+        .canvas-wrapper {
+            position: relative;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 2px solid #374151;
+        }
+
+        canvas {
+            display: block;
+            background: #000;
+        }
+
+        .controls {
+            background-color: var(--panel);
+            padding: 25px;
+            border-radius: 12px;
+            width: 250px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            border: 1px solid #374151;
+        }
+
+        button {
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: white;
+            font-size: 0.9rem;
+        }
+
+        .btn-generate { background-color: var(--secondary); color: #000; }
+        .btn-generate:hover { background-color: #34d399; }
+
+        .btn-project { background-color: var(--accent); }
+        .btn-project:hover { background-color: #a78bfa; }
+
+        .btn-reset { background-color: #4b5563; }
+        .btn-reset:hover { background-color: #6b7280; }
+
+        .stat-box {
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #d1d5db;
+        }
+        .stat-label { color: #9ca3af; font-size: 0.75rem; display: block; margin-bottom: 4px; }
+
+        /* Legend */
+        .legend { margin-top: 10px; font-size: 0.8rem; }
+        .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+    </style>
+</head>
+<body>
+
+    <h1>PCA Reduction Visualizer</h1>
+    <p>
+        <strong>Dimensionality Reduction:</strong> collapsing complex 2D data (X, Y) onto a single 1D line (Principal Component) while preserving the maximum spread of data.
+    </p>
+
+    <div class="main-container">
+        <div class="canvas-wrapper">
+            <canvas id="pcaCanvas" width="500" height="500"></canvas>
+        </div>
+
+        <div class="controls">
+            <div class="stat-box">
+                <span class="stat-label">Current State</span>
+                <span id="status-text" style="color: #38bdf8; font-weight: bold;">2D Data</span>
+            </div>
+
+            <button class="btn-generate" onclick="generateData()">1. New Random Data</button>
+            <button class="btn-project" onclick="toggleProjection()">2. Toggle Reduction</button>
+            
+            <div class="legend">
+                <div><span class="dot" style="background:#38bdf8"></span>Original Data</div>
+                <div style="margin-top:5px;"><span class="dot" style="background:#f472b6"></span>Projected (Reduced)</div>
+                <div style="margin-top:5px;"><span class="dot" style="background:white"></span>Principal Component</div>
+            </div>
+
+            <div class="stat-box">
+                <span class="stat-label">Variance Explanation</span>
+                Visualizing how PCA finds the "best fit" line to squash data onto.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('pcaCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusText = document.getElementById('status-text');
+
+        let points = [];
+        let projectedPoints = [];
+        let meanX, meanY, slope;
+        let isProjected = false;
+        let animationProgress = 0; // 0 to 1
+        let animationId;
+
+        // Settings
+        const numPoints = 60;
+        const padding = 50;
+        
+        // Initialize
+        generateData();
+
+        function generateData() {
+            points = [];
+            isProjected = false;
+            animationProgress = 0;
+            statusText.innerText = "2D Data (Original)";
+            if(animationId) cancelAnimationFrame(animationId);
+
+            // Generate correlated data to make PCA obvious (oval shape)
+            // y = mx + c + noise
+            const angle = (Math.random() * Math.PI) / 2 - Math.PI/4; // Random angle between -45 and 45
+            const spreadX = 150;
+            const spreadY = 40 + Math.random() * 30; // Narrower spread perpendicular
+
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+
+            for (let i = 0; i < numPoints; i++) {
+                // Create random points in an ellipse shape
+                let u = (Math.random() - 0.5) * 2; // -1 to 1
+                let v = (Math.random() - 0.5) * 2; // -1 to 1
+                
+                // Box Muller or just stretching
+                // Simple rotation matrix application for oval shape
+                let x = u * spreadX * Math.cos(angle) - v * spreadY * Math.sin(angle);
+                let y = u * spreadX * Math.sin(angle) + v * spreadY * Math.cos(angle);
+
+                points.push({ x: x + centerX, y: y + centerY });
+            }
+
+            calculatePCA();
+            draw();
+        }
+
+        function calculatePCA() {
+            // 1. Calculate Mean
+            let sumX = 0, sumY = 0;
+            points.forEach(p => { sumX += p.x; sumY += p.y; });
+            meanX = sumX / numPoints;
+            meanY = sumY / numPoints;
+
+            // 2. Estimate Slope of Principal Component (Linear Regression logic approx for visualization)
+            // For a perfect PCA we'd need Covariance Matrix + Eigenvectors, but for 2D visualization,
+            // calculating the line of best fit (orthogonal regression ideally, but simple regression is close enough for viz)
+            // Let's do a simple covariance calculation to get the angle.
+            let num = 0, den = 0;
+            points.forEach(p => {
+                num += (p.x - meanX) * (p.y - meanY);
+                den += (p.x - meanX) * (p.x - meanX);
+            });
+            
+            // This gives slope of regression y on x. 
+            // Better approach for PCA visualization: just calculate covariance angle
+            let varX = 0, varY = 0, covXY = 0;
+            points.forEach(p => {
+                varX += (p.x - meanX)**2;
+                varY += (p.y - meanY)**2;
+                covXY += (p.x - meanX) * (p.y - meanY);
+            });
+            
+            // Eigen vector calculation for 2x2 matrix
+            // This gives us the exact main axis of the ellipse
+            let delta = Math.sqrt((varX - varY)**2 + 4 * covXY**2);
+            let lambda1 = (varX + varY + delta) / 2;
+            // let lambda2 = (varX + varY - delta) / 2;
+            
+            // Vector elements
+            let vx = covXY;
+            let vy = lambda1 - varX;
+            let mag = Math.sqrt(vx*vx + vy*vy);
+            
+            // Normalized direction vector (dx, dy)
+            let dx = vx / mag;
+            let dy = vy / mag;
+
+            // If vertical line case
+            if(mag === 0) { dx = 1; dy = 0; }
+
+            // 3. Calculate Projected Points
+            // Projection of point P onto line defined by Mean + t * Vector
+            projectedPoints = points.map(p => {
+                // Vector from Mean to Point
+                let v2x = p.x - meanX;
+                let v2y = p.y - meanY;
+                
+                // Dot product to project
+                let dot = v2x * dx + v2y * dy;
+                
+                return {
+                    x: meanX + dot * dx,
+                    y: meanY + dot * dy
+                };
+            });
+            
+            // Store slope for drawing the line
+            slope = { dx, dy };
+        }
+
+        function toggleProjection() {
+            isProjected = !isProjected;
+            statusText.innerText = isProjected ? "Reduced to 1D" : "2D Data (Original)";
+            
+            if(isProjected) {
+                animateTo(1);
+            } else {
+                animateTo(0);
+            }
+        }
+
+        function animateTo(target) {
+            if(animationId) cancelAnimationFrame(animationId);
+            
+            function loop() {
+                let diff = target - animationProgress;
+                if(Math.abs(diff) < 0.01) {
+                    animationProgress = target;
+                    draw();
+                    return;
+                }
+                
+                animationProgress += diff * 0.1; // Smooth easing
+                draw();
+                animationId = requestAnimationFrame(loop);
+            }
+            loop();
+        }
+
+        function draw() {
+            // Clear Screen
+            ctx.fillStyle = '#111827'; // Match var(--bg)
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Grid (Subtle)
+            ctx.strokeStyle = '#1f2937';
+            ctx.lineWidth = 1;
+            for(let i=0; i<canvas.width; i+=50) {
+                ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i, canvas.height); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(canvas.width, i); ctx.stroke();
+            }
+
+            // Draw Principal Component Line (The Axis)
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            // Extend line far in both directions
+            let far = 1000;
+            ctx.moveTo(meanX - slope.dx * far, meanY - slope.dy * far);
+            ctx.lineTo(meanX + slope.dx * far, meanY + slope.dy * far);
+            ctx.stroke();
+
+            // Draw Points
+            for(let i=0; i<numPoints; i++) {
+                let original = points[i];
+                let target = projectedPoints[i];
+
+                // Linear Interpolation based on animationProgress
+                let currentX = original.x + (target.x - original.x) * animationProgress;
+                let currentY = original.y + (target.y - original.y) * animationProgress;
+
+                // Visual: Draw connecting line from original to projection (The "Error" or "loss")
+                // Only visible when moving or projected
+                if (animationProgress > 0.01) {
+                    ctx.strokeStyle = `rgba(244, 114, 182, ${animationProgress * 0.5})`; // Pink fade
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(original.x, original.y);
+                    ctx.lineTo(currentX, currentY);
+                    ctx.stroke();
+                }
+
+                // Draw the Dot
+                ctx.beginPath();
+                ctx.arc(currentX, currentY, 5, 0, Math.PI * 2);
+                
+                // Color transition from Blue (2D) to Pink (1D)
+                // We mix colors purely for visual flair
+                ctx.fillStyle = animationProgress > 0.5 ? '#f472b6' : '#38bdf8';
+                ctx.fill();
+            }
+            
+            // Draw Mean Center
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(meanX, meanY, 3, 0, Math.PI*2);
+            ctx.fill();
+        }
+
+    </script>
+</body>
+</html>
